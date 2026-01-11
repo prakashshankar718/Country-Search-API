@@ -4,21 +4,19 @@ import (
 	"context"
 	"country-search-api/pkg/cache"
 	"country-search-api/pkg/logger"
-	"country-search-api/pkg/models"
-	"fmt"
-	"io"
+	"errors"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 // curl http://localhost:8080/api/countries/search?name=India
+// var restcountries = "https://restcountries.com/v3.1/name/{name}?fields=name,capital,currencies,population&fullText=true"
+var countryClient = NewClient(7 * time.Second)
 
 func RegisterRoutes() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -71,13 +69,11 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	}
 }
 
-var restcountries = "https://restcountries.com/v3.1/name/{name}?fields=name,capital,currencies,population&fullText=true"
-
 func countriesSearch(c *gin.Context) {
 	countryName := c.DefaultQuery("name", "India")
 
 	logger.Log().Info("searching country details in local cache:", "country", countryName)
-	if country, ok := cache.CountryCache.Get(countryName); ok {
+	if country, ok := cache.Cache.Get(countryName); ok {
 		logger.Log().Info("country details present in local cache:", "country", countryName)
 		c.JSON(http.StatusOK, country)
 		return
@@ -85,45 +81,61 @@ func countriesSearch(c *gin.Context) {
 
 	logger.Log().Info("country details does not exist in local cache:", "country", countryName)
 	logger.Log().Info("searching in 3rd party API:", "country", countryName)
-	country, err := getCountryFromAPI(countryName)
+	// country, err := getCountryFromAPI(countryName)
+	// if err != nil {
+	// 	logger.Log().Error("falied getCountryFromRC()", "error", err)
+	// 	c.JSON(http.StatusInternalServerError, gin.H{
+	// 		"error": err.Error(),
+	// 	})
+	// 	return
+	// }
+
+	// ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	// defer cancel()
+
+	country, err := countryClient.GetByName(c.Request.Context(), countryName)
 	if err != nil {
-		logger.Log().Error("falied getCountryFromRC()", "error", err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+		switch {
+		case errors.Is(err, ErrNotFound):
+			c.JSON(404, gin.H{"error": "country not found"})
+		case errors.Is(err, context.DeadlineExceeded):
+			c.JSON(504, gin.H{"error": "request timeout"})
+		default:
+			c.JSON(502, gin.H{"error": "upstream service error"})
+		}
 		return
 	}
 
 	logger.Log().Info("storing country details in local cache:", "country", countryName)
-	go cache.CountryCache.Set(countryName, country)
+	go cache.Cache.Set(countryName, country)
 
 	c.JSON(http.StatusOK, country)
 }
 
-func getCountryFromAPI(countryName string) (country *models.Country, err error) {
-	url := strings.ReplaceAll(restcountries, "{name}", countryName)
+// func getCountryFromAPI(countryName string) (country *models.Country, err error) {
+// 	url := strings.ReplaceAll(restcountries, "{name}", countryName)
 
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get details from %s: %w", url, err)
-	}
-	defer resp.Body.Close()
+// 	resp, err := http.Get(url)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("unable to get details from %s: %w", url, err)
+// 	}
+// 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unable to get details from %s: %s", url, resp.Status)
-	}
+// 	if resp.StatusCode != http.StatusOK {
+// 		return nil, fmt.Errorf("unable to get details from %s: %s", url, resp.Status)
+// 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("unable to read details from %s: %w", url, err)
-	}
+// 	body, err := io.ReadAll(resp.Body)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("unable to read details from %s: %w", url, err)
+// 	}
 
-	// fmt.Printf("Body: %s\n", body)
+// 	// fmt.Printf("Body: %s\n", body)
 
-	country = &models.Country{}
-	country.Name = gjson.GetBytes(body, "0.name.common").String()
-	country.Currency = gjson.GetBytes(body, "0.currencies.*.symbol").String()
-	country.Capital = gjson.GetBytes(body, "0.capital.0").String()
-	country.Population = gjson.GetBytes(body, "0.population").Int()
-	return
-}
+// 	country = &models.Country{}
+// 	country.Name = gjson.GetBytes(body, "0.name.common").String()
+// 	country.Currency = gjson.GetBytes(body, "0.currencies.*.symbol").String()
+// 	country.Capital = gjson.GetBytes(body, "0.capital.0").String()
+// 	country.Population = gjson.GetBytes(body, "0.population").Int()
+// 	return
+// }
