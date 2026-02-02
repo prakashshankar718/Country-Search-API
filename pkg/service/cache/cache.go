@@ -16,22 +16,28 @@ type cache struct {
 
 var Cache CacheInf = NewCache()
 
-func NewCache() *cache {
+func NewCache() CacheInf {
 	return &cache{
 		data: make(map[string]any),
 	}
 }
 
-func (c *cache) Get(name string) (country any, hasValue bool) {
+func (c *cache) Get(key string) (country any, hasValue bool) {
+	if key == "" {
+		return nil, false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	country, hasValue = c.data[name]
+	country, hasValue = c.data[key]
 	return
 }
 
-func (c *cache) Set(name string, country any) {
+func (c *cache) Set(key string, value any) {
+	if key == "" {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.data[name] = country
+	c.data[key] = value
 }

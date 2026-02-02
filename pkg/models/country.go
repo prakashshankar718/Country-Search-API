@@ -6,3 +6,10 @@ type Country struct {
 	Currency   string `json:"currency"`
 	Population int64  `json:"population"`
 }
+
+func (c Country) Validate() bool {
+	if c.Name == "" || c.Capital == "" || c.Currency == "" {
+		return false
+	}
+	return true
+}

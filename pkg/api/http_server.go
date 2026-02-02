@@ -2,9 +2,10 @@ package api
 
 import (
 	"context"
-	"country-search-api/pkg/cache"
+	"country-search-api/pkg/handler"
 	"country-search-api/pkg/logger"
-	"errors"
+	http_client "country-search-api/pkg/service/client"
+	"country-search-api/pkg/service/country"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,20 +17,29 @@ import (
 
 // curl http://localhost:8080/api/countries/search?name=India
 // var restcountries = "https://restcountries.com/v3.1/name/{name}?fields=name,capital,currencies,population&fullText=true"
-var countryClient = NewClient(7 * time.Second)
 
 func RegisterRoutes() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	router := gin.Default()
-	router.Use(TimeoutMiddleware(5 * time.Second))
-	router.GET("/api/countries/search", countriesSearch)
+	router.Use(TimeoutMiddleware(20 * time.Second))
+
+	defaultBaseURL := "https://restcountries.com/v3.1"
+	httpClient := http_client.NewHTTPClient(5*time.Second, nil)
+	counryService := country.NewCountryService(
+		httpClient,
+		defaultBaseURL,
+	)
+	countryHandler := handler.NewCountryHandler(counryService)
+
+	router.GET("/api/countries/search", countryHandler.GetCountry)
 
 	srv := &http.Server{
 		Addr:              ":8080",
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      5 * time.Second,
 	}
 
 	// Initializing the server in a goroutine so that
@@ -69,48 +79,32 @@ func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	}
 }
 
-func countriesSearch(c *gin.Context) {
-	countryName := c.DefaultQuery("name", "India")
+// func countriesHandler(c *gin.Context) {
+// 	countryName := c.DefaultQuery("name", "India")
 
-	logger.Log().Info("searching country details in local cache:", "country", countryName)
-	if country, ok := cache.Cache.Get(countryName); ok {
-		logger.Log().Info("country details present in local cache:", "country", countryName)
-		c.JSON(http.StatusOK, country)
-		return
-	}
+// 	country, err := country.NewCountryService().GetCountryByName(c.Request.Context(), countryName)
+// 	if err != nil {
+// 		switch {
+// 		case errors.Is(err, http_client.ErrNotFound):
+// 			c.JSON(http.StatusNotFound, gin.H{"error": "country not found"})
 
-	logger.Log().Info("country details does not exist in local cache:", "country", countryName)
-	logger.Log().Info("searching in 3rd party API:", "country", countryName)
-	// country, err := getCountryFromAPI(countryName)
-	// if err != nil {
-	// 	logger.Log().Error("falied getCountryFromRC()", "error", err)
-	// 	c.JSON(http.StatusInternalServerError, gin.H{
-	// 		"error": err.Error(),
-	// 	})
-	// 	return
-	// }
+// 		case errors.Is(err, context.DeadlineExceeded):
+// 			c.JSON(http.StatusRequestTimeout, gin.H{"error": "request timeout"})
 
-	// ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-	// defer cancel()
+// 		case errors.Is(err, http_client.ErrInvalidData):
+// 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "could not validate country details"})
 
-	country, err := countryClient.GetByName(c.Request.Context(), countryName)
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrNotFound):
-			c.JSON(404, gin.H{"error": "country not found"})
-		case errors.Is(err, context.DeadlineExceeded):
-			c.JSON(504, gin.H{"error": "request timeout"})
-		default:
-			c.JSON(502, gin.H{"error": "upstream service error"})
-		}
-		return
-	}
+// 		case errors.Is(err, http_client.ErrUpstream):
+// 			c.JSON(http.StatusBadGateway, gin.H{"error": "upstream service error"})
 
-	logger.Log().Info("storing country details in local cache:", "country", countryName)
-	go cache.Cache.Set(countryName, country)
+// 		default:
+// 			c.JSON(http.StatusInternalServerError, gin.H{"error": "unable to get country details"})
+// 		}
+// 		return
+// 	}
 
-	c.JSON(http.StatusOK, country)
-}
+// 	c.JSON(http.StatusOK, country)
+// }
 
 // func getCountryFromAPI(countryName string) (country *models.Country, err error) {
 // 	url := strings.ReplaceAll(restcountries, "{name}", countryName)
